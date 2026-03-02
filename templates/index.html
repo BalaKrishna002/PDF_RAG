@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PDF RAG — Groq × ChromaDB</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0a0a0a; --surface: #111; --surface2: #181818;
+      --border: #242424; --border2: #333;
+      --accent: #e8ff47; --accent2: #47ffe8;
+      --text: #e8e8e0; --muted: #555;
+      --danger: #ff4747; --success: #47ff8a;
+      --mono: 'IBM Plex Mono', monospace;
+      --sans: 'Syne', sans-serif;
+      --r: 4px;
+    }
+    html { background: var(--bg); color: var(--text); font-family: var(--mono); }
+    body { min-height: 100vh; }
+    body::before {
+      content: ''; position: fixed; inset: 0;
+      background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,.01) 2px, rgba(255,255,255,.01) 4px);
+      pointer-events: none; z-index: 9999;
+    }
+
+    /* Layout */
+    .app { display: grid; grid-template-columns: 310px 1fr; grid-template-rows: 52px 1fr; min-height: 100vh; }
+
+    /* Header */
+    header {
+      grid-column: 1/-1; display: flex; align-items: center; gap: 16px;
+      padding: 0 24px; border-bottom: 1px solid var(--border); background: var(--surface);
+    }
+    .logo { font-family: var(--sans); font-size: 1rem; font-weight: 800; letter-spacing: -.02em; }
+    .logo span { color: var(--accent); }
+    .sub { font-size: .62rem; color: var(--muted); }
+    .badges { display: flex; gap: 7px; margin-left: auto; }
+    .badge {
+      font-size: .6rem; letter-spacing: .12em; text-transform: uppercase;
+      padding: 3px 9px; border: 1px solid var(--border2); border-radius: var(--r); color: var(--muted);
+    }
+    .badge.on { border-color: var(--accent); color: var(--accent); }
+
+    /* Sidebar */
+    .sidebar {
+      border-right: 1px solid var(--border); background: var(--surface);
+      padding: 20px 18px; overflow-y: auto; display: flex; flex-direction: column; gap: 22px;
+    }
+    .sec-label {
+      font-size: .58rem; letter-spacing: .18em; text-transform: uppercase; color: var(--muted);
+      margin-bottom: 9px; display: flex; align-items: center; gap: 8px;
+    }
+    .sec-label::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+    /* Drop zone */
+    .dz {
+      border: 1px dashed var(--border2); border-radius: var(--r);
+      padding: 26px 14px; text-align: center; cursor: pointer;
+      transition: all .2s; position: relative;
+    }
+    .dz:hover, .dz.over { border-color: var(--accent); background: rgba(232,255,71,.03); }
+    .dz input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+    .dz-icon { font-size: 1.8rem; margin-bottom: 7px; }
+    .dz-hint { font-size: .72rem; color: var(--muted); line-height: 1.5; }
+    .dz-hint b { color: var(--text); display: block; margin-bottom: 3px; }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+      padding: 8px 16px; border: 1px solid var(--border2); background: transparent; color: var(--text);
+      font-family: var(--mono); font-size: .72rem; letter-spacing: .05em; text-transform: uppercase;
+      border-radius: var(--r); cursor: pointer; transition: all .15s; width: 100%; margin-top: 9px;
+    }
+    .btn:hover { border-color: var(--text); background: rgba(255,255,255,.04); }
+    .btn.primary { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 600; }
+    .btn.primary:hover { background: #f5ff6e; }
+    .btn.primary:disabled { opacity: .35; cursor: not-allowed; }
+    .btn.danger { border-color: var(--danger); color: var(--danger); }
+    .btn.danger:hover { background: rgba(255,71,71,.07); }
+
+    /* Progress */
+    .prog-wrap { height: 2px; background: var(--border); border-radius: 99px; overflow: hidden; display: none; margin-top: 8px; }
+    .prog-wrap.show { display: block; }
+    .prog-bar { height: 100%; width: 0; background: var(--accent); border-radius: 99px; transition: width .3s; }
+
+    /* Toasts */
+    .toasts { display: flex; flex-direction: column; gap: 6px; }
+    .toast {
+      padding: 8px 12px; border-radius: var(--r); font-size: .7rem; line-height: 1.5;
+      border-left: 3px solid var(--border2); background: var(--surface2);
+      animation: tin .2s ease;
+    }
+    .toast.ok  { border-left-color: var(--success); }
+    .toast.err { border-left-color: var(--danger); color: var(--danger); }
+    @keyframes tin { from { opacity:0; transform:translateY(5px); } to { opacity:1; transform:translateY(0); } }
+
+    /* Stats */
+    .stats { display: flex; gap: 8px; }
+    .stat { flex: 1; padding: 10px; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--r); text-align: center; }
+    .stat-v { font-family: var(--sans); font-size: 1.35rem; font-weight: 800; color: var(--accent); }
+    .stat-k { font-size: .58rem; color: var(--muted); text-transform: uppercase; letter-spacing: .1em; }
+
+    /* File list */
+    .file-list { display: flex; flex-direction: column; gap: 5px; }
+    .file-item {
+      display: flex; align-items: center; gap: 7px; padding: 6px 9px;
+      background: var(--surface2); border: 1px solid var(--border); border-radius: var(--r); font-size: .68rem;
+    }
+    .file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .empty { font-size: .7rem; color: var(--muted); text-align: center; padding: 10px 0; }
+
+    /* Main chat */
+    .main { display: flex; flex-direction: column; background: var(--bg); overflow: hidden; }
+    .convo { flex: 1; overflow-y: auto; padding: 22px 26px; display: flex; flex-direction: column; gap: 18px; }
+
+    /* Welcome */
+    .welcome { max-width: 480px; margin: auto; text-align: center; padding: 48px 0; }
+    .w-glyph { font-family: var(--sans); font-size: 3.5rem; font-weight: 800; color: var(--accent); letter-spacing: -.06em; text-shadow: 0 0 60px rgba(232,255,71,.25); }
+    .welcome h2 { font-family: var(--sans); font-size: 1.1rem; font-weight: 700; margin: 12px 0 7px; }
+    .welcome p { font-size: .72rem; color: var(--muted); line-height: 1.7; }
+
+    /* Messages */
+    .msg { display: flex; flex-direction: column; gap: 5px; max-width: 720px; }
+    .msg.user { align-self: flex-end; align-items: flex-end; }
+    .msg.ai   { align-self: flex-start; }
+    .msg-role { font-size: .58rem; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); padding: 0 3px; }
+    .bubble {
+      padding: 12px 16px; border-radius: var(--r); font-size: .78rem; line-height: 1.7;
+      border: 1px solid var(--border);
+    }
+    .msg.user .bubble { background: var(--surface2); border-color: var(--border2); }
+    .msg.ai   .bubble { background: rgba(232,255,71,.03); border-color: rgba(232,255,71,.13); }
+    .bubble pre { white-space: pre-wrap; word-break: break-word; }
+
+    /* Sources row */
+    .src-row { display: flex; gap: 5px; flex-wrap: wrap; padding: 0 3px; align-items: center; }
+    .src-chip {
+      font-size: .6rem; padding: 3px 8px; background: var(--surface2);
+      border: 1px solid var(--border); border-radius: 99px; color: var(--muted);
+      cursor: pointer; transition: all .15s;
+    }
+    .src-chip:hover { border-color: var(--accent2); color: var(--accent2); }
+    .elapsed { font-size: .58rem; color: var(--muted); padding: 2px 7px; background: var(--surface2); border: 1px solid var(--border); border-radius: 99px; }
+
+    /* Typing */
+    .typing { display: flex; gap: 5px; align-items: center; padding: 12px 16px; background: rgba(232,255,71,.03); border: 1px solid rgba(232,255,71,.13); border-radius: var(--r); width: fit-content; }
+    .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); opacity: .4; animation: blink 1.2s infinite; }
+    .dot:nth-child(2) { animation-delay: .2s; } .dot:nth-child(3) { animation-delay: .4s; }
+    @keyframes blink { 0%,100%{opacity:.2;transform:scale(.8);} 50%{opacity:1;transform:scale(1);} }
+
+    /* Input bar */
+    .input-bar { padding: 14px 22px; border-top: 1px solid var(--border); background: var(--surface); display: flex; gap: 9px; align-items: flex-end; }
+    .input-wrap { flex: 1; position: relative; }
+    textarea {
+      width: 100%; resize: none; background: var(--surface2); color: var(--text);
+      border: 1px solid var(--border2); border-radius: var(--r);
+      padding: 11px 36px 11px 13px; font-family: var(--mono); font-size: .78rem; line-height: 1.5;
+      outline: none; min-height: 44px; max-height: 180px; transition: border-color .15s;
+    }
+    textarea:focus { border-color: var(--accent); }
+    textarea::placeholder { color: var(--muted); }
+    .cc { position: absolute; right: 10px; bottom: 9px; font-size: .58rem; color: var(--muted); }
+    .send {
+      background: var(--accent); border: none; color: #000; font-family: var(--mono);
+      font-size: .68rem; font-weight: 600; padding: 11px 18px; border-radius: var(--r);
+      cursor: pointer; text-transform: uppercase; letter-spacing: .08em; transition: all .15s; white-space: nowrap;
+    }
+    .send:hover { background: #f5ff6e; }
+    .send:disabled { opacity: .35; cursor: not-allowed; }
+
+    /* Modal */
+    .backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.75); backdrop-filter: blur(4px); z-index: 1000; display: none; align-items: center; justify-content: center; }
+    .backdrop.open { display: flex; }
+    .modal { background: var(--surface); border: 1px solid var(--border2); border-radius: var(--r); max-width: 540px; width: 90%; max-height: 80vh; overflow-y: auto; padding: 22px; }
+    .modal-hd { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+    .modal-title { font-family: var(--sans); font-size: .88rem; font-weight: 700; }
+    .modal-x { background: none; border: 1px solid var(--border2); color: var(--text); padding: 3px 9px; border-radius: var(--r); cursor: pointer; font-size: .7rem; }
+    .modal-x:hover { border-color: var(--danger); color: var(--danger); }
+    .src-card { padding: 11px; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--r); margin-bottom: 9px; }
+    .src-meta { font-size: .62rem; color: var(--muted); margin-bottom: 5px; }
+    .src-snip { font-size: .7rem; line-height: 1.6; }
+
+    ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 99px; }
+
+    @media (max-width: 680px) {
+      .app { grid-template-columns: 1fr; }
+      .sidebar { border-right: none; border-bottom: 1px solid var(--border); }
+    }
+  </style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Header -->
+  <header>
+    <div class="logo">PDF<span>RAG</span></div>
+    <div class="sub">Groq × HuggingFace × ChromaDB</div>
+    <div class="badges">
+      <span class="badge {% if db_ready %}on{% endif %}" id="db-badge">DB {% if db_ready %}READY{% else %}EMPTY{% endif %}</span>
+      <span class="badge on">llama-3.3-70b</span>
+    </div>
+  </header>
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+
+    <div>
+      <div class="sec-label">Index</div>
+      <div class="stats">
+        <div class="stat"><div class="stat-v" id="chunk-count">{{ doc_count }}</div><div class="stat-k">Chunks</div></div>
+        <div class="stat"><div class="stat-v" id="file-count">{{ files | length }}</div><div class="stat-k">Files</div></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="sec-label">Upload PDF</div>
+      <div class="dz" id="dz">
+        <input type="file" id="file-input" accept=".pdf" />
+        <div class="dz-icon">📄</div>
+        <div class="dz-hint"><b>Drop PDF here</b>or click to browse</div>
+      </div>
+      <div class="prog-wrap" id="pw"><div class="prog-bar" id="pb"></div></div>
+      <div class="toasts" id="toasts" style="margin-top:9px;"></div>
+      <button class="btn primary" id="upload-btn" disabled>↑ Ingest Document</button>
+    </div>
+
+    <div>
+      <div class="sec-label">Ingested Files</div>
+      <div class="file-list" id="file-list">
+        {% if files %}
+          {% for f in files %}
+            <div class="file-item"><span>📑</span><span class="file-name">{{ f }}</span></div>
+          {% endfor %}
+        {% else %}
+          <div class="empty">No documents yet</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div style="margin-top:auto;">
+      <button class="btn danger" id="reset-btn">⚠ Clear Database</button>
+    </div>
+
+  </aside>
+
+  <!-- Chat -->
+  <main class="main">
+    <div class="convo" id="convo">
+      <div class="welcome" id="welcome">
+        <div class="w-glyph">RAG</div>
+        <h2>Retrieval-Augmented Generation</h2>
+        <p>Upload a PDF to ingest it, then ask questions.<br/>The LLM answers using only retrieved document context.</p>
+        {% if not db_ready %}<p style="margin-top:14px;color:var(--accent);font-size:.7rem;">← Upload a PDF to get started</p>{% endif %}
+      </div>
+    </div>
+
+    <div class="input-bar">
+      <div class="input-wrap">
+        <textarea id="q-input" rows="1"
+          placeholder="{% if db_ready %}Ask a question about your documents…{% else %}Upload a PDF first{% endif %}"
+          {% if not db_ready %}disabled{% endif %}></textarea>
+        <span class="cc" id="cc">0</span>
+      </div>
+      <button class="send" id="send-btn" {% if not db_ready %}disabled{% endif %}>Send ↗</button>
+    </div>
+  </main>
+</div>
+
+<!-- Source modal -->
+<div class="backdrop" id="backdrop">
+  <div class="modal">
+    <div class="modal-hd">
+      <div class="modal-title">Retrieved Sources</div>
+      <button class="modal-x" id="modal-x">✕ Close</button>
+    </div>
+    <div id="modal-body"></div>
+  </div>
+</div>
+
+<script>
+  const $ = id => document.getElementById(id);
+  let pending = null, querying = false;
+
+  // ── Drop zone ─────────────────────────────────────
+  const dz = $('dz'), fi = $('file-input'), ub = $('upload-btn');
+  fi.addEventListener('change', () => { pending = fi.files[0]||null; ub.disabled=!pending; if(pending) setHint(pending); });
+  dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('over'); });
+  dz.addEventListener('dragleave', () => dz.classList.remove('over'));
+  dz.addEventListener('drop', e => {
+    e.preventDefault(); dz.classList.remove('over');
+    const f = e.dataTransfer.files[0];
+    if (f?.name.endsWith('.pdf')) { pending=f; ub.disabled=false; setHint(f); }
+    else toast('Only PDF files are supported.','err');
+  });
+  function setHint(f) {
+    dz.querySelector('.dz-hint').innerHTML = `<b>${f.name}</b>${(f.size/1024).toFixed(1)} KB`;
+  }
+
+  // ── Upload ────────────────────────────────────────
+  ub.addEventListener('click', async () => {
+    if (!pending) return;
+    ub.disabled = true;
+    const pw=$('pw'), pb=$('pb');
+    pw.classList.add('show'); pb.style.width='35%';
+    const fd = new FormData(); fd.append('file', pending);
+    try {
+      pb.style.width='65%';
+      const r = await fetch('/api/v1/documents/upload',{method:'POST',body:fd});
+      const d = await r.json();
+      pb.style.width='100%';
+      if (d.success) {
+        toast(`✓ <b>${d.filename}</b> — ${d.pages} pages, ${d.chunks} chunks (${d.elapsed}s)`,'ok');
+        updateSidebar(d.total_chunks, d.ingested_files);
+        enableChat();
+        pending=null; fi.value='';
+        dz.querySelector('.dz-hint').innerHTML='<b>Drop PDF here</b>or click to browse';
+      } else {
+        toast(d.detail||'Upload failed.','err');
+      }
+    } catch(e) { toast('Network error: '+e.message,'err'); }
+    finally {
+      setTimeout(()=>{ pw.classList.remove('show'); pb.style.width='0'; },600);
+      ub.disabled = false;
+    }
+  });
+
+  function updateSidebar(count, files) {
+    $('chunk-count').textContent = count;
+    $('file-count').textContent  = files.length;
+    $('file-list').innerHTML = files.length
+      ? files.map(f=>`<div class="file-item"><span>📑</span><span class="file-name">${esc(f)}</span></div>`).join('')
+      : '<div class="empty">No documents yet</div>';
+  }
+
+  function enableChat() {
+    $('q-input').disabled  = false;
+    $('send-btn').disabled = false;
+    $('q-input').placeholder = 'Ask a question about your documents…';
+    $('db-badge').textContent = 'DB READY';
+    $('db-badge').classList.add('on');
+  }
+
+  // ── Query ─────────────────────────────────────────
+  const qa = $('q-input'), sb = $('send-btn');
+  qa.addEventListener('input',()=>{ qa.style.height='auto'; qa.style.height=Math.min(qa.scrollHeight,180)+'px'; $('cc').textContent=qa.value.length; });
+  qa.addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();doQuery();} });
+  sb.addEventListener('click',doQuery);
+
+  async function doQuery() {
+    const q = qa.value.trim();
+    if (!q || querying) return;
+    querying=true; sb.disabled=true;
+    $('welcome').style.display='none';
+    appendMsg('user',q); qa.value=''; qa.style.height='auto'; $('cc').textContent='0';
+    const tip = appendTyping(); scroll();
+    try {
+      const fd=new FormData(); fd.append('question',q);
+      const r = await fetch('/api/v1/query',{method:'POST',body:fd});
+      const d = await r.json();
+      tip.remove();
+      if(d.success) appendMsg('ai',d.answer,d.sources,d.elapsed);
+      else appendMsg('ai','⚠ '+(d.detail||'Error'));
+    } catch(e) { tip.remove(); appendMsg('ai','⚠ Network error: '+e.message); }
+    finally { querying=false; sb.disabled=false; scroll(); }
+  }
+
+  function appendMsg(role,text,sources,elapsed) {
+    const c=$('convo'), w=document.createElement('div'); w.className=`msg ${role==='user'?'user':'ai'}`;
+    const lbl=document.createElement('div'); lbl.className='msg-role'; lbl.textContent=role==='user'?'▸ You':'▸ RAG';
+    const b=document.createElement('div'); b.className='bubble'; b.innerHTML=`<pre>${esc(text)}</pre>`;
+    w.append(lbl,b);
+    if(sources?.length){
+      const row=document.createElement('div'); row.className='src-row';
+      sources.forEach(s=>{
+        const ch=document.createElement('span'); ch.className='src-chip';
+        ch.textContent=`📎 ${s.file} p.${s.page}`;
+        ch.addEventListener('click',()=>openModal(sources));
+        row.appendChild(ch);
+      });
+      if(elapsed){ const t=document.createElement('span'); t.className='elapsed'; t.textContent=elapsed+'s'; row.appendChild(t); }
+      w.appendChild(row);
+    }
+    c.appendChild(w); return w;
+  }
+
+  function appendTyping() {
+    const c=$('convo'),w=document.createElement('div'); w.className='msg ai';
+    const l=document.createElement('div'); l.className='msg-role'; l.textContent='▸ RAG';
+    const t=document.createElement('div'); t.className='typing';
+    t.innerHTML='<div class="dot"></div><div class="dot"></div><div class="dot"></div>';
+    w.append(l,t); c.appendChild(w); return w;
+  }
+
+  function scroll(){ const c=$('convo'); c.scrollTop=c.scrollHeight; }
+
+  // ── Modal ─────────────────────────────────────────
+  function openModal(sources){
+    $('modal-body').innerHTML=sources.map((s,i)=>`
+      <div class="src-card">
+        <div class="src-meta">${i+1}. ${esc(s.file)} — Page ${s.page}</div>
+        <div class="src-snip">${esc(s.snippet)}…</div>
+      </div>`).join('');
+    $('backdrop').classList.add('open');
+  }
+  $('modal-x').addEventListener('click',()=>$('backdrop').classList.remove('open'));
+  $('backdrop').addEventListener('click',e=>{ if(e.target===$('backdrop')) $('backdrop').classList.remove('open'); });
+
+  // ── Reset ─────────────────────────────────────────
+  $('reset-btn').addEventListener('click',async ()=>{
+    if(!confirm('Wipe the entire ChromaDB database?')) return;
+    const r=await fetch('/api/v1/system/reset',{method:'DELETE'});
+    const d=await r.json();
+    if(d.success){
+      updateSidebar(0,[]);
+      $('convo').innerHTML='<div class="welcome" id="welcome"><div class="w-glyph">RAG</div><h2>Database Cleared</h2><p>Upload a new PDF to get started.</p></div>';
+      $('db-badge').textContent='DB EMPTY'; $('db-badge').classList.remove('on');
+      $('q-input').disabled=true; $('send-btn').disabled=true;
+      toast('Database cleared.','ok');
+    }
+  });
+
+  // ── Toast ─────────────────────────────────────────
+  function toast(msg,type='ok'){
+    const a=$('toasts'),t=document.createElement('div'); t.className=`toast ${type}`; t.innerHTML=msg;
+    a.appendChild(t); setTimeout(()=>t.remove(),5000);
+  }
+  function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+</script>
+</body>
+</html>
